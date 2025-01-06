@@ -1,5 +1,7 @@
 import os
 from pandas import isna, read_excel, concat, read_csv
+from time import ctime
+
 
 Fluids_ID =    {
                 'argon' : 'C7440371',
@@ -80,19 +82,23 @@ Fluids_ID =    {
                 }
 
 def Read_Params_CSV():
-
+    log = ""
     filename = "NIST Extractor Config File.xlsx"
     try:
         params = read_excel("NIST Extractor Config File.xlsx").drop(columns=["Unnamed: 2", "Unnamed: 3"])
         for index, row in params.iterrows():
             if isna(row["Unit"]) and index != 0 and index != 8:
-                exit()
+                log += f'{ctime()} - Error - Please ensure the config file has values against all required fields: {os.getcwd()}\\{filename}\n'
+                log += f"{ctime()} - Params used:\n{params["Unit"].loc[0:15].to_string(index=False)}\n"
+                print(log)
+                return log
 
         return params
 
     except:
-        print(f'Error - Please ensure the file named "{filename}" is in the directory below, and enter values against all fields:\n{os.getcwd()}')
-        exit()
+        log += f'Error - Could not find config file, please ensure file is named and located in the directory as shown: {os.getcwd()}\\{filename}\n'
+        print(log)
+        return log
 
 
 def Generate_NIST_Refs(params):
@@ -115,7 +121,7 @@ def Generate_NIST_Refs(params):
 
 
 def getNIST(params):
-
+    log = ""
     Tlow = params["Unit"].loc[13]
     Thigh = params["Unit"].loc[14]
     deltaT = params["Unit"].loc[15]
@@ -127,11 +133,11 @@ def getNIST(params):
 
     else:
         temp_count = int((float(Thigh)-float(Tlow))/float(deltaT)) + 1
-
-    print(f"Generating data for {params["Unit"].loc[0]}:")
-    print(f"{temp_count} temperature point(s) from {params["Unit"].loc[13]} {params["Unit"].loc[1]} to {params["Unit"].loc[14]} {params["Unit"].loc[1]}")
-    print(f"{int((float(params["Unit"].loc[11])-float(params["Unit"].loc[10]))/float(params["Unit"].loc[12])) + 1} pressure point(s) from {params["Unit"].loc[10]} {params["Unit"].loc[2]} to {params["Unit"].loc[11]} {params["Unit"].loc[2]}")
-    print(f"Using units:\n{params["Unit"].loc[1:7].to_string(index=False)}")
+    log += f"Generating data for {params["Unit"].loc[0]}:\n"
+    log += f"{temp_count} temperature point(s) from {params["Unit"].loc[13]} {params["Unit"].loc[1]} to {params["Unit"].loc[14]} {params["Unit"].loc[1]}\n"
+    log += f"{int((float(params["Unit"].loc[11])-float(params["Unit"].loc[10]))/float(params["Unit"].loc[12])) + 1} pressure point(s) from {params["Unit"].loc[10]} {params["Unit"].loc[2]} to {params["Unit"].loc[11]} {params["Unit"].loc[2]}\n"
+    log += f"Using units:\n{params["Unit"].loc[1:7].to_string(index=False)}\n"
+    print(log)
 
     for i in range(temp_count):
         loading_bar.append("_")
@@ -144,12 +150,18 @@ def getNIST(params):
 
         try:
             data = getFromNIST_isoTherm(params, Temp)
+            if type(data) == str:
+                raise Exception
+
             data_list.append(data)
             print("", end="\r")
 
         except:
-            print("Error - Please specify parameters correctly")
-            quit()
+            log += "Error - Please specify parameters correctly\n"
+            if type(data) == str:
+                log += f"Source link used: {data}\n"
+            print(log)
+            return log
 
     collated_data = concat(data_list)
 
@@ -174,17 +186,20 @@ def getFromNIST_isoTherm(params, Temp, TypeOfData="IsoTherm", Digits = '5'):
                    + '&VisUnit='+ str(params["NIST Refs"].loc[6])
                    + '&STUnit=' + str(params["NIST Refs"].loc[7]))
 
-    request  = (source_link)
-    data = read_csv(request, delimiter='\t')
-    source_links = []
-    for i in range(len(data)):
-        source_links.append(source_link)
-    data["Source"] = source_links
+    try:
+        request  = (source_link)
+        data = read_csv(request, delimiter='\t')
+        source_links = []
+        for i in range(len(data)):
+            source_links.append(source_link)
+        data["Source"] = source_links
+        return data
 
-    return data
+    except:
+        return source_link
 
 def Generate_CSV(collated_data, params):
-
+    log = ""
     i=0
     if os.path.isfile(f"{params["Unit"].loc[0]} data.csv"):
         while True:
@@ -197,13 +212,32 @@ def Generate_CSV(collated_data, params):
     else:
         filename = f"{params["Unit"].loc[0]} data.csv"
     collated_data.to_csv(filename, index=False)
-    print(f"\nFile generated:\n{os.getcwd()}\\{filename}")
-    return
+    log += f"File generated: {os.getcwd()}\\{filename}\n"
+    print(log)
+    return log
 
 
 if __name__ == '__main__':
+    with open("Log.txt", "a") as log_file:
 
-    params = Read_Params_CSV()
-    params = Generate_NIST_Refs(params)
-    collated_data = getNIST(params)
-    Generate_CSV(collated_data, params)
+        log_file.write(f"\n{ctime()} - Starting script\n")
+        log_file.write(f"{ctime()} - Reading config file\n")
+        params = Read_Params_CSV()
+
+        if type(params) == str:
+            log_file.write(f"{params} ")
+            exit()
+
+        else:
+            params = Generate_NIST_Refs(params)
+            collated_data = getNIST(params)
+            log_file.write(f"{ctime()} - Downloading data from NIST\n")
+
+            if type(collated_data) == str:
+                log_file.write(f"{ctime()} - {collated_data} ")
+                exit()
+
+            else:
+                log = Generate_CSV(collated_data, params)
+                log_file.write(f"{ctime()} - {log}")
+
