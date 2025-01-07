@@ -1,7 +1,9 @@
 import os
+from io import StringIO
 from pandas import isna, read_excel, concat, read_csv
 from time import ctime
-
+import requests
+import warnings
 
 Fluids_ID =    {
                 'argon' : 'C7440371',
@@ -11,7 +13,7 @@ Fluids_ID =    {
                 'water' : 'C7732185',
                 'hydrogen' :'C1333740',
                 'parahydrogen' : 'B5000001',
-                'deuterium' : 'C778239',
+                'deuterium' : 'C7782390',
                 'oxygen' : 'C7782447',
                 'fluorine' : 'C7782414',
                 'carbon_monoxide' :  'C630080',
@@ -25,7 +27,7 @@ Fluids_ID =    {
                 'propane' : 'C74986',
                 'propene' : 'C115071',
                 'propyne' : 'C74997',
-                'cyclopropane' : 'C7519',
+                'cyclopropane' : 'C75194',
                 'butane' : 'C106978',
                 'isobutane' : 'C75285',
                 'II_Methylbutane' : 'C78784',
@@ -85,6 +87,7 @@ def Read_Params_CSV():
     log = ""
     filename = "NIST Extractor Config File.xlsx"
     try:
+        warnings.simplefilter(action='ignore', category=UserWarning)
         params = read_excel("NIST Extractor Config File.xlsx").drop(columns=["Unnamed: 2", "Unnamed: 3"])
         for index, row in params.iterrows():
             if isna(row["Unit"]) and index != 0 and index != 8:
@@ -96,7 +99,7 @@ def Read_Params_CSV():
         return params
 
     except:
-        log += f'Error - Could not find config file, please ensure file is named and located in the directory as shown: {os.getcwd()}\\{filename}\n'
+        log += f'{ctime()} - Error - Could not find config file, please ensure file is named and located in the directory as shown: {os.getcwd()}\\{filename}\n'
         print(log)
         return log
 
@@ -133,7 +136,7 @@ def getNIST(params):
 
     else:
         temp_count = int((float(Thigh)-float(Tlow))/float(deltaT)) + 1
-    log += f"Generating data for {params["Unit"].loc[0]}:\n"
+    log += f"{ctime()} - Generating data for {params["Unit"].loc[0]}:\n"
     log += f"{temp_count} temperature point(s) from {params["Unit"].loc[13]} {params["Unit"].loc[1]} to {params["Unit"].loc[14]} {params["Unit"].loc[1]}\n"
     log += f"{int((float(params["Unit"].loc[11])-float(params["Unit"].loc[10]))/float(params["Unit"].loc[12])) + 1} pressure point(s) from {params["Unit"].loc[10]} {params["Unit"].loc[2]} to {params["Unit"].loc[11]} {params["Unit"].loc[2]}\n"
     log += f"Using units:\n{params["Unit"].loc[1:7].to_string(index=False)}\n"
@@ -157,11 +160,14 @@ def getNIST(params):
             print("", end="\r")
 
         except:
-            log += "Error - Please specify parameters correctly\n"
+            error_log = f"\n{ctime()} = Error received from NIST\n"
+
             if type(data) == str:
-                log += f"Source link used: {data}\n"
-            print(log)
-            return log
+                error_log += f"{data}\n"
+            print(error_log)
+            if "Range" in data:
+                log += f"NIST does not have data for this fluid in the range you've specified, please confirm the temperature and pressure values you have input\n"
+            return log + error_log
 
     collated_data = concat(data_list)
 
@@ -187,16 +193,18 @@ def getFromNIST_isoTherm(params, Temp, TypeOfData="IsoTherm", Digits = '5'):
                    + '&STUnit=' + str(params["NIST Refs"].loc[7]))
 
     try:
-        request  = (source_link)
-        data = read_csv(request, delimiter='\t')
+        response = requests.get(source_link).text
+        data = read_csv(StringIO(response), delimiter='\t')
         source_links = []
         for i in range(len(data)):
             source_links.append(source_link)
         data["Source"] = source_links
+        if "Exception" in data.loc[0]:
+            raise Exception
         return data
 
     except:
-        return source_link
+        return f"{response}Source_link: {source_link}"
 
 def Generate_CSV(collated_data, params):
     log = ""
@@ -212,32 +220,39 @@ def Generate_CSV(collated_data, params):
     else:
         filename = f"{params["Unit"].loc[0]} data.csv"
     collated_data.to_csv(filename, index=False)
-    log += f"File generated: {os.getcwd()}\\{filename}\n"
+    log += f"{ctime()} - File generated: {os.getcwd()}\\{filename}\n"
     print(log)
     return log
 
 
 if __name__ == '__main__':
-    with open("Log.txt", "a") as log_file:
 
-        log_file.write(f"\n{ctime()} - Starting script\n")
-        log_file.write(f"{ctime()} - Reading config file\n")
-        params = Read_Params_CSV()
+    try:
+        with open("Log.txt", "a") as log_file:
+            log_file.write(f"\n{ctime()} - Starting script\n")
+            print(f"{ctime()} - Starting script")
+            log_file.write(f"{ctime()} - Reading config file\n")
+            print(f"{ctime()} - Reading config file")
 
-        if type(params) == str:
-            log_file.write(f"{params} ")
-            exit()
+            params = Read_Params_CSV()
 
-        else:
-            params = Generate_NIST_Refs(params)
-            collated_data = getNIST(params)
-            log_file.write(f"{ctime()} - Downloading data from NIST\n")
-
-            if type(collated_data) == str:
-                log_file.write(f"{ctime()} - {collated_data} ")
-                exit()
+            if type(params) == str:
+                log_file.write(f"{params} ")
+                raise Exception
 
             else:
-                log = Generate_CSV(collated_data, params)
-                log_file.write(f"{ctime()} - {log}")
+                params = Generate_NIST_Refs(params)
+                collated_data = getNIST(params)
+                log_file.write(f"{ctime()} - Downloading data from NIST\n")
 
+                if type(collated_data) == str:
+                    log_file.write(f"{collated_data} ")
+                    raise Exception
+
+                else:
+                    log = Generate_CSV(collated_data, params)
+                    log_file.write(f"{log}")
+
+    except:
+        input(f"Program has hit an error, please press enter and refer to the log file for details")
+        exit()
